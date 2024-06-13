@@ -80,6 +80,7 @@ We simulate some data according to this model.
 
 
 ```{python}
+import arviz as az
 import numpy as np
 import jax.numpy as jnp
 import jax
@@ -95,7 +96,7 @@ from scipy import stats
 np.random.seed(0)
 N = 10000 # number of observations
 D = 3 # number of features
-I = 2# number of items
+I = 2 # number of items
 
 X = np.random.randn(N, D)
 
@@ -119,6 +120,16 @@ y1[y0 == 1] = np.random.binomial(1, probabilities_Y1_given_Y0)
 X = jnp.array(X)
 y0 = jnp.array(y0)
 y1 = jnp.array(y1)
+
+# Store ground truth estimates for analysis
+param_names = ["Y0_beta", "Y0_intercept", "Y1_given_Y0_beta", "Y1_given_Y0_intercept"]
+
+ground_truth = {
+ "Y0_beta": true_beta_Y0,
+ "Y0_intercept": true_intercept_Y0, 
+ "Y1_given_Y0_beta": true_beta_Y1_given_Y0, 
+ "Y1_given_Y0_intercept": true_intercept_Y1_given_Y0 
+}
 ```
 
 # NumPyro Models
@@ -180,7 +191,16 @@ def get_predictive_posterior_samples(model):
     # Run MCMC to sample from the posterior
     mcmc = MCMC(nuts_kernel, num_warmup=500, num_samples=1000)
     mcmc.run(jax.random.PRNGKey(0), X, I, y0, y1)
-    return mcmc
+    param_estimates = az.summary(az.from_numpyro(mcmc))
+
+    annotated_estimates = []
+    for param_name in param_names:
+        mask = param_estimates.index.str.split("[").str[0] == param_name
+        sel_param_estimates = param_estimates.loc[mask]
+        gt_param_values = ground_truth[param_name].flatten()
+        sel_param_estimates.insert(0, 'ground_truth', gt_param_values)
+        annotated_estimates.append(sel_param_estimates.iloc[:,:3])
+    return pd.concat(annotated_estimates)
 ```
 
 ## Parameter Estimation
@@ -193,41 +213,14 @@ mask_handler_param_estimates = get_predictive_posterior_samples(mask_handler_mod
 ```
 
 ```{python}
-param_names = ["Y0_beta", "Y0_intercept", "Y1_given_Y0_beta", "Y1_given_Y0_intercept"]
-
-ground_truth = {
- "Y0_beta": true_beta_Y0,
- "Y0_intercept": true_intercept_Y0, 
- "Y1_given_Y0_beta": true_beta_Y1_given_Y0, 
- "Y1_given_Y0_intercept": true_intercept_Y1_given_Y0 
-}
-    
-
-sites = simple_param_estimates._states[simple_param_estimates._sample_field]
-simple_param_summary_stats = numpyro.diagnostics.summary(sites)
-
-sites = mask_handler_param_estimates._states[mask_handler_param_estimates._sample_field]
-mask_handler_param_summary_stats = numpyro.diagnostics.summary(sites)
+simple_param_estimates
 ```
+
+From inspection, we can see the parameter estimates for our simple model do not match the ground truth values for the item choice model of $P(Y_1 \mid Y_0, X)$. Now let's look at the parameters from the model with masking.
 
 ```{python}
-for param_name in param_names:
-    print(param_name)
-    param_stats = pd.DataFrame({key: value.flatten() for key, value in simple_param_summary_stats[param_name].items()})
-    param_stats.insert(0, 'ground_truth',ground_truth[param_name].flatten())
-    print(param_stats.iloc[:,:3])
-    print()
+mask_handler_param_estimates
 ```
 
-From inspection, we can see the parameter estimates for our simple model do not match the ground truth values. Now let's look at the parameters from the model with masking.
+We see that now the ground truth and estimated parameter values are very close. The mask handler worked as intended!
 
-```{python}
-for param_name in param_names:
-    print(param_name)
-    param_stats = pd.DataFrame({key: value.flatten() for key, value in mask_handler_param_summary_stats[param_name].items()})
-    param_stats.insert(0, 'ground_truth',ground_truth[param_name].flatten())
-    print(param_stats.iloc[:,:3])
-    print()
-```
-
-We see that now the ground truth and estimated parameter values match. The mask handler worked as intended!
